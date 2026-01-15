@@ -13,7 +13,7 @@ A beautiful, feature-rich workout timer app built with Flutter. Create custom wo
 
 ## 🚀 Live Demo
 
-**[Try GymMaster Now →](https://YOUR_USERNAME.github.io/GymMaster/)**
+**[Try GymMaster Now →](https://kv4u.github.io/GymMaster/)**
 
 ## 📱 Screenshots
 
@@ -32,7 +32,7 @@ A beautiful, feature-rich workout timer app built with Flutter. Create custom wo
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/GymMaster.git
+git clone https://github.com/kv4u/GymMaster.git
 
 # Navigate to project
 cd GymMaster
