@@ -64,7 +64,7 @@ class AppThemes {
         ),
       ),
     ),
-    cardTheme: CardTheme(
+    cardTheme: CardThemeData(
       color: const Color(0xFF1A1A2E),
       elevation: 8,
       shadowColor: const Color(0xFF00F5FF).withValues(alpha: 0.3),
@@ -177,7 +177,7 @@ class AppThemes {
         ),
       ),
     ),
-    cardTheme: CardTheme(
+    cardTheme: CardThemeData(
       color: Colors.white,
       elevation: 2,
       shadowColor: Colors.black12,
@@ -289,7 +289,7 @@ class AppThemes {
         ),
       ),
     ),
-    cardTheme: CardTheme(
+    cardTheme: CardThemeData(
       color: const Color(0xFF2D1B4E),
       elevation: 8,
       shadowColor: const Color(0xFFB8FF00).withValues(alpha: 0.2),
