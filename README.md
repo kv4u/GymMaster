@@ -68,7 +68,10 @@ flutter build ios --release
 
 ## 📄 License
 
-MIT License - feel free to use this project for learning or personal use!
+**⚠️ Proprietary License - All Rights Reserved**
+
+This code is viewable for educational purposes only. You may NOT use, copy, 
+modify, or distribute this code in any project. See [LICENSE](LICENSE) for details.
 
 ---
 
