@@ -29,11 +29,15 @@ class _SessionTimerScreenState extends State<SessionTimerScreen>
   late DateTime _startedAt;
   late AnimationController _pulseController;
   late AnimationController _progressController;
-  
+  late AnimationController _phaseTransitionController;
+  late Animation<double> _phaseScaleAnimation;
+
   int _totalCompletedSets = 0;
 
-  WorkoutItem get _currentExercise => widget.session.exercises[_currentExerciseIndex];
-  bool get _isLastExercise => _currentExerciseIndex >= widget.session.exercises.length - 1;
+  WorkoutItem get _currentExercise =>
+      widget.session.exercises[_currentExerciseIndex];
+  bool get _isLastExercise =>
+      _currentExerciseIndex >= widget.session.exercises.length - 1;
   bool get _isLastSet => _currentSet >= _currentExercise.sets;
 
   @override
@@ -43,7 +47,7 @@ class _SessionTimerScreenState extends State<SessionTimerScreen>
     _startedAt = DateTime.now();
 
     _pulseController = AnimationController(
-      duration: const Duration(milliseconds: 1000),
+      duration: const Duration(milliseconds: 1200),
       vsync: this,
     )..repeat(reverse: true);
 
@@ -52,6 +56,19 @@ class _SessionTimerScreenState extends State<SessionTimerScreen>
       vsync: this,
     );
 
+    _phaseTransitionController = AnimationController(
+      duration: const Duration(milliseconds: 400),
+      vsync: this,
+    );
+
+    _phaseScaleAnimation = Tween<double>(begin: 0.8, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _phaseTransitionController,
+        curve: Curves.elasticOut,
+      ),
+    );
+
+    _phaseTransitionController.forward();
     _startReadyCountdown();
   }
 
@@ -60,7 +77,12 @@ class _SessionTimerScreenState extends State<SessionTimerScreen>
     _timer?.cancel();
     _pulseController.dispose();
     _progressController.dispose();
+    _phaseTransitionController.dispose();
     super.dispose();
+  }
+
+  void _animatePhaseChange() {
+    _phaseTransitionController.forward(from: 0);
   }
 
   void _startReadyCountdown() {
@@ -77,6 +99,7 @@ class _SessionTimerScreenState extends State<SessionTimerScreen>
   }
 
   void _startWorkPhase() {
+    _animatePhaseChange();
     setState(() {
       _phase = SessionPhase.work;
       _currentSeconds = _currentExercise.workTime;
@@ -87,19 +110,17 @@ class _SessionTimerScreenState extends State<SessionTimerScreen>
   }
 
   void _startRestPhase() {
-    // Check if this is the last set of this exercise
     if (_isLastSet) {
-      // Check if this is the last exercise
       if (_isLastExercise) {
         _completeSession();
         return;
       } else {
-        // Move to rest between exercises
         _startExerciseRestPhase();
         return;
       }
     }
 
+    _animatePhaseChange();
     setState(() {
       _phase = SessionPhase.rest;
       _currentSeconds = _currentExercise.restTime;
@@ -110,11 +131,13 @@ class _SessionTimerScreenState extends State<SessionTimerScreen>
   }
 
   void _startExerciseRestPhase() {
+    _animatePhaseChange();
     setState(() {
       _phase = SessionPhase.exerciseRest;
       _currentSeconds = widget.session.restBetweenExercises;
     });
-    _progressController.duration = Duration(seconds: widget.session.restBetweenExercises);
+    _progressController.duration =
+        Duration(seconds: widget.session.restBetweenExercises);
     _progressController.forward(from: 0);
     _startTimer();
   }
@@ -138,7 +161,7 @@ class _SessionTimerScreenState extends State<SessionTimerScreen>
       } else {
         timer.cancel();
         _playBeep(isLong: true);
-        
+
         if (_phase == SessionPhase.work) {
           _totalCompletedSets++;
           _startRestPhase();
@@ -155,9 +178,9 @@ class _SessionTimerScreenState extends State<SessionTimerScreen>
   void _completeSession() {
     _timer?.cancel();
     _totalCompletedSets++;
+    _animatePhaseChange();
     setState(() => _phase = SessionPhase.completed);
 
-    // Save to history
     final history = WorkoutHistory(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       workoutName: widget.session.name,
@@ -178,8 +201,10 @@ class _SessionTimerScreenState extends State<SessionTimerScreen>
     setState(() => _isPaused = !_isPaused);
     if (_isPaused) {
       _progressController.stop();
+      _pulseController.stop();
     } else {
       _progressController.forward();
+      _pulseController.repeat(reverse: true);
     }
   }
 
@@ -209,10 +234,10 @@ class _SessionTimerScreenState extends State<SessionTimerScreen>
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: theme.colorScheme.surface,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
         title: Text('End Session?', style: theme.textTheme.headlineSmall),
         content: Text(
-          'Your progress will be saved.',
+          'Your progress will be saved to history.',
           style: theme.textTheme.bodyMedium,
         ),
         actions: [
@@ -225,7 +250,6 @@ class _SessionTimerScreenState extends State<SessionTimerScreen>
           ),
           ElevatedButton(
             onPressed: () {
-              // Save partial progress
               if (_totalCompletedSets > 0) {
                 final history = WorkoutHistory(
                   id: DateTime.now().millisecondsSinceEpoch.toString(),
@@ -266,13 +290,14 @@ class _SessionTimerScreenState extends State<SessionTimerScreen>
       },
       child: Scaffold(
         backgroundColor: theme.scaffoldBackgroundColor,
-        body: Container(
+        body: AnimatedContainer(
+          duration: const Duration(milliseconds: 500),
           decoration: BoxDecoration(
             gradient: LinearGradient(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
               colors: [
-                _getPhaseColor().withValues(alpha: 0.15),
+                _getPhaseColor().withValues(alpha: 0.2),
                 theme.scaffoldBackgroundColor,
                 theme.scaffoldBackgroundColor,
               ],
@@ -294,236 +319,378 @@ class _SessionTimerScreenState extends State<SessionTimerScreen>
     return Column(
       children: [
         // Top bar
-        Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        _buildTopBar(theme),
+
+        const SizedBox(height: 16),
+
+        // Exercise info card
+        if (_phase != SessionPhase.ready)
+          _buildExerciseInfo(theme),
+
+        const Spacer(),
+
+        // Main timer section
+        ScaleTransition(
+          scale: _phaseScaleAnimation,
+          child: Column(
             children: [
-              IconButton(
-                onPressed: _confirmExit,
-                icon: Icon(
-                  Icons.close,
-                  color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
-                ),
-              ),
-              Expanded(
-                child: Column(
-                  children: [
-                    Text(
-                      widget.session.name,
-                      style: theme.textTheme.titleMedium,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    Text(
-                      'Exercise ${_currentExerciseIndex + 1}/${widget.session.exercises.length}',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.primary,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 48),
+              // Phase indicator
+              _buildPhaseIndicator(theme),
+              const SizedBox(height: 32),
+              // Timer circle
+              _buildTimerCircle(theme),
             ],
           ),
         ),
 
-        // Current exercise name
-        if (_phase != SessionPhase.ready && _phase != SessionPhase.exerciseRest)
+        const Spacer(),
+
+        // Progress section
+        _buildProgressSection(theme),
+
+        const SizedBox(height: 24),
+
+        // Controls
+        if (_phase != SessionPhase.ready) _buildControls(theme),
+
+        const SizedBox(height: 32),
+      ],
+    );
+  }
+
+  Widget _buildTopBar(ThemeData theme) {
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Row(
+        children: [
+          Material(
+            color: theme.colorScheme.surface,
+            borderRadius: BorderRadius.circular(12),
+            child: InkWell(
+              onTap: _confirmExit,
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                padding: const EdgeInsets.all(10),
+                child: Icon(
+                  Icons.close_rounded,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                  size: 22,
+                ),
+              ),
+            ),
+          ),
+          Expanded(
+            child: Column(
+              children: [
+                Text(
+                  widget.session.name.toUpperCase(),
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Exercise ${_currentExerciseIndex + 1} of ${widget.session.exercises.length}',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.primary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 44), // Balance
+        ],
+      ),
+    );
+  }
+
+  Widget _buildExerciseInfo(ThemeData theme) {
+    if (_phase == SessionPhase.exerciseRest) {
+      return _buildNextExercisePreview(theme);
+    }
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 24),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: _getPhaseColor().withValues(alpha: 0.3),
+        ),
+      ),
+      child: Row(
+        children: [
           Container(
-            margin: const EdgeInsets.symmetric(horizontal: 24),
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+            padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: theme.colorScheme.surface,
+              color: _getPhaseColor().withValues(alpha: 0.15),
               borderRadius: BorderRadius.circular(12),
             ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
+            child: Icon(
+              Icons.fitness_center_rounded,
+              color: _getPhaseColor(),
+              size: 22,
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.fitness_center, 
-                  color: theme.colorScheme.primary,
-                  size: 20,
-                ),
-                const SizedBox(width: 8),
                 Text(
                   _currentExercise.name,
                   style: theme.textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.bold,
                   ),
                 ),
-                const SizedBox(width: 12),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.primary.withValues(alpha: 0.2),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    'Set $_currentSet/${_currentExercise.sets}',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: theme.colorScheme.primary,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-        // Next exercise preview (during exercise rest)
-        if (_phase == SessionPhase.exerciseRest && !_isLastExercise)
-          Container(
-            margin: const EdgeInsets.symmetric(horizontal: 24),
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surface,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Column(
-              children: [
+                const SizedBox(height: 2),
                 Text(
-                  'NEXT EXERCISE',
-                  style: theme.textTheme.labelSmall?.copyWith(
+                  '${_currentExercise.workTime}s work • ${_currentExercise.restTime}s rest',
+                  style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                    letterSpacing: 2,
                   ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  widget.session.exercises[_currentExerciseIndex + 1].name,
-                  style: theme.textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                Text(
-                  '${widget.session.exercises[_currentExerciseIndex + 1].sets} sets • ${widget.session.exercises[_currentExerciseIndex + 1].workTime}s work',
-                  style: theme.textTheme.bodySmall,
                 ),
               ],
             ),
           ),
-
-        const Spacer(),
-
-        // Phase indicator
-        AnimatedBuilder(
-          animation: _pulseController,
-          builder: (context, child) {
-            return Container(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-              decoration: BoxDecoration(
-                color: _getPhaseColor().withValues(
-                  alpha: 0.2 + (_pulseController.value * 0.1),
-                ),
-                borderRadius: BorderRadius.circular(30),
-                border: Border.all(
-                  color: _getPhaseColor(),
-                  width: 2,
-                ),
-              ),
-              child: Text(
-                _getPhaseText(),
-                style: theme.textTheme.headlineMedium?.copyWith(
-                  color: _getPhaseColor(),
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 4,
-                ),
-              ),
-            );
-          },
-        ),
-
-        const SizedBox(height: 40),
-
-        // Timer display
-        Stack(
-          alignment: Alignment.center,
-          children: [
-            SizedBox(
-              width: 280,
-              height: 280,
-              child: AnimatedBuilder(
-                animation: _progressController,
-                builder: (context, child) {
-                  return CustomPaint(
-                    painter: _TimerRingPainter(
-                      progress: _phase == SessionPhase.ready
-                          ? 1.0
-                          : _progressController.value,
-                      color: _getPhaseColor(),
-                      backgroundColor:
-                          theme.colorScheme.surface.withValues(alpha: 0.5),
-                    ),
-                  );
-                },
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            decoration: BoxDecoration(
+              color: _getPhaseColor().withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Text(
+              'SET $_currentSet/${_currentExercise.sets}',
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: _getPhaseColor(),
+                fontWeight: FontWeight.bold,
+                letterSpacing: 0.5,
               ),
             ),
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  _formatTime(_currentSeconds),
-                  style: theme.textTheme.displayLarge?.copyWith(
-                    fontSize: 80,
-                    fontWeight: FontWeight.bold,
-                    color: _getPhaseColor(),
-                  ),
-                ),
-                Text(
-                  'seconds',
-                  style: theme.textTheme.bodyLarge,
-                ),
-              ],
-            ),
-          ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNextExercisePreview(ThemeData theme) {
+    final nextExercise = widget.session.exercises[_currentExerciseIndex + 1];
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 24),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: Colors.orange.withValues(alpha: 0.3),
+          width: 2,
         ),
-
-        const Spacer(),
-
-        // Overall progress
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24),
-          child: Column(
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    'Overall Progress',
-                    style: theme.textTheme.bodySmall,
-                  ),
-                  Text(
-                    '$_totalCompletedSets/${widget.session.totalSets} sets',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: theme.colorScheme.primary,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              LinearProgressIndicator(
-                value: _totalCompletedSets / widget.session.totalSets,
-                backgroundColor: theme.colorScheme.surface,
-                borderRadius: BorderRadius.circular(4),
+              Icon(Icons.arrow_forward_rounded, 
+                color: Colors.orange, size: 18),
+              const SizedBox(width: 8),
+              Text(
+                'NEXT EXERCISE',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: Colors.orange,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 2,
+                ),
               ),
             ],
           ),
-        ),
+          const SizedBox(height: 12),
+          Text(
+            nextExercise.name,
+            style: theme.textTheme.headlineSmall?.copyWith(
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '${nextExercise.sets} sets • ${nextExercise.workTime}s work • ${nextExercise.restTime}s rest',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
-        const SizedBox(height: 24),
+  Widget _buildPhaseIndicator(ThemeData theme) {
+    return AnimatedBuilder(
+      animation: _pulseController,
+      builder: (context, child) {
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
+          decoration: BoxDecoration(
+            color: _getPhaseColor().withValues(
+              alpha: 0.15 + (_pulseController.value * 0.1),
+            ),
+            borderRadius: BorderRadius.circular(30),
+            border: Border.all(
+              color: _getPhaseColor().withValues(alpha: 0.5),
+              width: 2,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: _getPhaseColor().withValues(alpha: 0.2),
+                blurRadius: 20,
+                spreadRadius: _pulseController.value * 5,
+              ),
+            ],
+          ),
+          child: Text(
+            _getPhaseText(),
+            style: theme.textTheme.titleLarge?.copyWith(
+              color: _getPhaseColor(),
+              fontWeight: FontWeight.bold,
+              letterSpacing: 4,
+            ),
+          ),
+        );
+      },
+    );
+  }
 
-        // Exercise progress dots
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24),
-          child: Row(
+  Widget _buildTimerCircle(ThemeData theme) {
+    return SizedBox(
+      width: 260,
+      height: 260,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          // Background glow
+          AnimatedBuilder(
+            animation: _pulseController,
+            builder: (context, child) {
+              return Container(
+                width: 240 + (_pulseController.value * 10),
+                height: 240 + (_pulseController.value * 10),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: _getPhaseColor().withValues(alpha: 0.15),
+                      blurRadius: 40,
+                      spreadRadius: 10,
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+          // Progress ring
+          AnimatedBuilder(
+            animation: _progressController,
+            builder: (context, child) {
+              return CustomPaint(
+                size: const Size(240, 240),
+                painter: _ModernTimerPainter(
+                  progress: _phase == SessionPhase.ready
+                      ? 1.0
+                      : _progressController.value,
+                  color: _getPhaseColor(),
+                  backgroundColor: theme.colorScheme.surface,
+                  strokeWidth: 10,
+                ),
+              );
+            },
+          ),
+          // Time display
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                _formatTime(_currentSeconds),
+                style: theme.textTheme.displayLarge?.copyWith(
+                  fontSize: 72,
+                  fontWeight: FontWeight.w300,
+                  color: _getPhaseColor(),
+                  height: 1,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'seconds',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                  letterSpacing: 2,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildProgressSection(ThemeData theme) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      child: Column(
+        children: [
+          // Overall progress bar
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surface,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Session Progress',
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                      ),
+                    ),
+                    Text(
+                      '$_totalCompletedSets / ${widget.session.totalSets} sets',
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        color: theme.colorScheme.primary,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(6),
+                  child: LinearProgressIndicator(
+                    value: _totalCompletedSets / widget.session.totalSets,
+                    minHeight: 8,
+                    backgroundColor: theme.colorScheme.primary.withValues(alpha: 0.1),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          // Exercise dots
+          Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: List.generate(widget.session.exercises.length, (index) {
               final isCompleted = index < _currentExerciseIndex;
               final isCurrent = index == _currentExerciseIndex;
-              return Container(
-                width: isCurrent ? 40 : 24,
+              return AnimatedContainer(
+                duration: const Duration(milliseconds: 300),
+                width: isCurrent ? 32 : 16,
                 height: 8,
-                margin: const EdgeInsets.symmetric(horizontal: 2),
+                margin: const EdgeInsets.symmetric(horizontal: 3),
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(4),
                   color: isCompleted
@@ -531,111 +698,162 @@ class _SessionTimerScreenState extends State<SessionTimerScreen>
                       : isCurrent
                           ? _getPhaseColor()
                           : theme.colorScheme.surface,
+                  border: !isCompleted && !isCurrent
+                      ? Border.all(
+                          color: theme.colorScheme.primary.withValues(alpha: 0.3),
+                        )
+                      : null,
                 ),
               );
             }),
           ),
-        ),
+        ],
+      ),
+    );
+  }
 
-        const SizedBox(height: 40),
-
-        // Controls
-        if (_phase != SessionPhase.ready)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 40),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                _ControlButton(
-                  icon: Icons.skip_next,
-                  label: 'SKIP',
-                  onTap: _skipPhase,
-                ),
-                _ControlButton(
-                  icon: _isPaused ? Icons.play_arrow : Icons.pause,
-                  label: _isPaused ? 'RESUME' : 'PAUSE',
-                  isPrimary: true,
-                  onTap: _togglePause,
-                ),
-              ],
-            ),
+  Widget _buildControls(ThemeData theme) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 40),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          // Skip button
+          _ControlButton(
+            icon: Icons.skip_next_rounded,
+            label: 'SKIP',
+            onTap: _skipPhase,
+            isPrimary: false,
           ),
-
-        const SizedBox(height: 40),
-      ],
+          const SizedBox(width: 32),
+          // Pause/Play button
+          _ControlButton(
+            icon: _isPaused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+            label: _isPaused ? 'RESUME' : 'PAUSE',
+            onTap: _togglePause,
+            isPrimary: true,
+            color: _isPaused ? theme.colorScheme.primary : null,
+          ),
+        ],
+      ),
     );
   }
 
   Widget _buildCompletedView() {
     final theme = Theme.of(context);
+    final duration = DateTime.now().difference(_startedAt);
 
     return Padding(
       padding: const EdgeInsets.all(24),
       child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Container(
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.primary.withValues(alpha: 0.2),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(
-              Icons.emoji_events,
-              size: 80,
-              color: theme.colorScheme.primary,
-            ),
+          const Spacer(),
+          // Trophy animation
+          TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0.0, end: 1.0),
+            duration: const Duration(milliseconds: 800),
+            curve: Curves.elasticOut,
+            builder: (context, value, child) {
+              return Transform.scale(
+                scale: value,
+                child: Container(
+                  padding: const EdgeInsets.all(32),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        theme.colorScheme.primary,
+                        theme.colorScheme.primary.withValues(alpha: 0.7),
+                      ],
+                    ),
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: theme.colorScheme.primary.withValues(alpha: 0.4),
+                        blurRadius: 30,
+                        spreadRadius: 5,
+                      ),
+                    ],
+                  ),
+                  child: const Icon(
+                    Icons.emoji_events_rounded,
+                    size: 64,
+                    color: Colors.white,
+                  ),
+                ),
+              );
+            },
           ),
 
           const SizedBox(height: 32),
 
           Text(
-            'SESSION COMPLETE!',
-            style: theme.textTheme.headlineLarge?.copyWith(
-              color: theme.colorScheme.primary,
+            'WORKOUT COMPLETE!',
+            style: theme.textTheme.headlineMedium?.copyWith(
+              fontWeight: FontWeight.bold,
               letterSpacing: 2,
             ),
           ),
-
           const SizedBox(height: 8),
-
           Text(
             widget.session.name,
-            style: theme.textTheme.titleLarge,
+            style: theme.textTheme.titleMedium?.copyWith(
+              color: theme.colorScheme.primary,
+            ),
           ),
 
           const SizedBox(height: 40),
 
+          // Stats grid
           Container(
             padding: const EdgeInsets.all(24),
             decoration: BoxDecoration(
               color: theme.colorScheme.surface,
-              borderRadius: BorderRadius.circular(20),
+              borderRadius: BorderRadius.circular(24),
             ),
             child: Column(
               children: [
-                _CompletedStat(
-                  icon: Icons.fitness_center,
-                  label: 'Exercises Completed',
-                  value: '${widget.session.exercises.length}',
+                Row(
+                  children: [
+                    Expanded(
+                      child: _CompletedStatCard(
+                        icon: Icons.fitness_center_rounded,
+                        value: '${widget.session.exercises.length}',
+                        label: 'Exercises',
+                        color: theme.colorScheme.primary,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _CompletedStatCard(
+                        icon: Icons.repeat_rounded,
+                        value: '${widget.session.totalSets}',
+                        label: 'Sets',
+                        color: theme.colorScheme.secondary,
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 16),
-                _CompletedStat(
-                  icon: Icons.repeat,
-                  label: 'Total Sets',
-                  value: '${widget.session.totalSets}',
-                ),
-                const SizedBox(height: 16),
-                _CompletedStat(
-                  icon: Icons.timer,
-                  label: 'Total Time',
-                  value: _formatDuration(DateTime.now().difference(_startedAt)),
-                ),
-                const SizedBox(height: 16),
-                _CompletedStat(
-                  icon: Icons.local_fire_department,
-                  label: 'Est. Calories',
-                  value: '~${_estimateCalories()} cal',
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _CompletedStatCard(
+                        icon: Icons.timer_rounded,
+                        value: '${duration.inMinutes}:${(duration.inSeconds % 60).toString().padLeft(2, '0')}',
+                        label: 'Duration',
+                        color: theme.colorScheme.primary,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _CompletedStatCard(
+                        icon: Icons.local_fire_department_rounded,
+                        value: '~${(duration.inMinutes * 6.5).round()}',
+                        label: 'Calories',
+                        color: Colors.orange,
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -645,11 +863,21 @@ class _SessionTimerScreenState extends State<SessionTimerScreen>
 
           SizedBox(
             width: double.infinity,
+            height: 56,
             child: ElevatedButton(
               onPressed: () => Navigator.pop(context),
-              child: const Padding(
-                padding: EdgeInsets.symmetric(vertical: 4),
-                child: Text('FINISH'),
+              style: ElevatedButton.styleFrom(
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+              ),
+              child: Text(
+                'DONE',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  color: theme.colorScheme.onPrimary,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 2,
+                ),
               ),
             ),
           ),
@@ -697,69 +925,153 @@ class _SessionTimerScreenState extends State<SessionTimerScreen>
     }
     return '$seconds';
   }
-
-  String _formatDuration(Duration duration) {
-    final minutes = duration.inMinutes;
-    final seconds = duration.inSeconds % 60;
-    return '${minutes}m ${seconds}s';
-  }
-
-  int _estimateCalories() {
-    final duration = DateTime.now().difference(_startedAt);
-    return (duration.inMinutes * 6.5).round();
-  }
 }
 
-class _ControlButton extends StatelessWidget {
+class _ControlButton extends StatefulWidget {
   final IconData icon;
   final String label;
-  final bool isPrimary;
   final VoidCallback onTap;
+  final bool isPrimary;
+  final Color? color;
 
   const _ControlButton({
     required this.icon,
     required this.label,
-    this.isPrimary = false,
     required this.onTap,
+    this.isPrimary = false,
+    this.color,
+  });
+
+  @override
+  State<_ControlButton> createState() => _ControlButtonState();
+}
+
+class _ControlButtonState extends State<_ControlButton>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _scaleAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      duration: const Duration(milliseconds: 100),
+      vsync: this,
+    );
+    _scaleAnimation = Tween<double>(begin: 1.0, end: 0.9).animate(_controller);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final buttonColor = widget.color ?? theme.colorScheme.primary;
+
+    return GestureDetector(
+      onTapDown: (_) => _controller.forward(),
+      onTapUp: (_) {
+        _controller.reverse();
+        widget.onTap();
+      },
+      onTapCancel: () => _controller.reverse(),
+      child: AnimatedBuilder(
+        animation: _scaleAnimation,
+        builder: (context, child) => Transform.scale(
+          scale: _scaleAnimation.value,
+          child: child,
+        ),
+        child: Column(
+          children: [
+            Container(
+              width: widget.isPrimary ? 80 : 60,
+              height: widget.isPrimary ? 80 : 60,
+              decoration: BoxDecoration(
+                color: widget.isPrimary
+                    ? buttonColor
+                    : theme.colorScheme.surface,
+                shape: BoxShape.circle,
+                border: widget.isPrimary
+                    ? null
+                    : Border.all(
+                        color: buttonColor.withValues(alpha: 0.3),
+                        width: 2,
+                      ),
+                boxShadow: widget.isPrimary
+                    ? [
+                        BoxShadow(
+                          color: buttonColor.withValues(alpha: 0.4),
+                          blurRadius: 16,
+                          offset: const Offset(0, 4),
+                        ),
+                      ]
+                    : null,
+              ),
+              child: Icon(
+                widget.icon,
+                size: widget.isPrimary ? 36 : 26,
+                color: widget.isPrimary
+                    ? Colors.white
+                    : buttonColor,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              widget.label,
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                fontWeight: FontWeight.w600,
+                letterSpacing: 1,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CompletedStatCard extends StatelessWidget {
+  final IconData icon;
+  final String value;
+  final String label;
+  final Color color;
+
+  const _CompletedStatCard({
+    required this.icon,
+    required this.value,
+    required this.label,
+    required this.color,
   });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    return GestureDetector(
-      onTap: onTap,
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(16),
+      ),
       child: Column(
         children: [
-          Container(
-            width: isPrimary ? 80 : 60,
-            height: isPrimary ? 80 : 60,
-            decoration: BoxDecoration(
-              color: isPrimary
-                  ? theme.colorScheme.primary
-                  : theme.colorScheme.surface,
-              shape: BoxShape.circle,
-              border: isPrimary
-                  ? null
-                  : Border.all(
-                      color: theme.colorScheme.primary.withValues(alpha: 0.5),
-                      width: 2,
-                    ),
-            ),
-            child: Icon(
-              icon,
-              size: isPrimary ? 40 : 28,
-              color: isPrimary
-                  ? theme.colorScheme.onPrimary
-                  : theme.colorScheme.primary,
-            ),
-          ),
+          Icon(icon, color: color, size: 26),
           const SizedBox(height: 8),
           Text(
+            value,
+            style: theme.textTheme.headlineSmall?.copyWith(
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          Text(
             label,
-            style: theme.textTheme.labelSmall?.copyWith(
-              color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
-              letterSpacing: 1,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
             ),
           ),
         ],
@@ -768,64 +1080,25 @@ class _ControlButton extends StatelessWidget {
   }
 }
 
-class _CompletedStat extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String value;
-
-  const _CompletedStat({
-    required this.icon,
-    required this.label,
-    required this.value,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            color: theme.colorScheme.primary.withValues(alpha: 0.15),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Icon(icon, color: theme.colorScheme.primary, size: 24),
-        ),
-        const SizedBox(width: 16),
-        Expanded(
-          child: Text(label, style: theme.textTheme.bodyLarge),
-        ),
-        Text(
-          value,
-          style: theme.textTheme.titleMedium?.copyWith(
-            color: theme.colorScheme.primary,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _TimerRingPainter extends CustomPainter {
+class _ModernTimerPainter extends CustomPainter {
   final double progress;
   final Color color;
   final Color backgroundColor;
+  final double strokeWidth;
 
-  _TimerRingPainter({
+  _ModernTimerPainter({
     required this.progress,
     required this.color,
     required this.backgroundColor,
+    required this.strokeWidth,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
-    final radius = size.width / 2 - 10;
-    const strokeWidth = 12.0;
+    final radius = (size.width - strokeWidth) / 2;
 
+    // Background circle
     final bgPaint = Paint()
       ..color = backgroundColor
       ..style = PaintingStyle.stroke
@@ -834,6 +1107,7 @@ class _TimerRingPainter extends CustomPainter {
 
     canvas.drawCircle(center, radius, bgPaint);
 
+    // Progress arc
     final progressPaint = Paint()
       ..color = color
       ..style = PaintingStyle.stroke
@@ -850,7 +1124,7 @@ class _TimerRingPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _TimerRingPainter oldDelegate) {
+  bool shouldRepaint(covariant _ModernTimerPainter oldDelegate) {
     return oldDelegate.progress != progress || oldDelegate.color != color;
   }
 }
